@@ -5,7 +5,11 @@
 
 #include <QThread>
 #include <atomic>
-#include "FrameBank.h"
+#include <opencv2/opencv.hpp>   // VideoCapture / CAP_PROP_*（mvcore::FrameBank 仅传递 core）
+#include <mvcore/FrameBank.h>
+
+// FrameBank 统一使用套件共享库 mvcore（与 SmartSurveillance 同一份实现）
+using mvcore::FrameBank;
 
 class VideoCaptureThread : public QThread
 {

@@ -19,6 +19,7 @@ target_link_libraries(FaceGate
     Qt5::Concurrent
     Qt5::SerialPort
     ${OpenCV_LIBS}
+    mvcore            # 套件共享基础库：FrameBank/PathResolver/EventId（header-only）
     FaceAlgorithm
 )
 
@@ -26,11 +27,11 @@ set_target_properties(FaceGate PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
 )
 
-# 运行时 DLL 部署
+# 运行时 DLL 部署（OpenCV SDK 复用 SS 仓内同版本包，套件内相对引用）
 if(WIN32)
   add_custom_command(TARGET FaceGate POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-      "F:/CODE/Qt_forNoVS/SmartSurveillance/utils/opencv4_5_2/x64/mingw/bin/"
+      "${CMAKE_SOURCE_DIR}/../SmartSurveillance/utils/opencv4_5_2/x64/mingw/bin/"
       $<TARGET_FILE_DIR:FaceGate>
     COMMAND ${CMAKE_COMMAND} -E copy
       "${Qt5_ROOT}/bin/Qt5Core.dll"

@@ -8,7 +8,10 @@
 #include <QHash>
 #include <QImage>
 #include <facealgorithm/FaceAlgorithm.h>
-#include "FrameBank.h"
+#include <mvcore/FrameBank.h>
+
+// FrameBank 统一使用套件共享库 mvcore（与 SmartSurveillance 同一份实现）
+using mvcore::FrameBank;
 #include "VideoCaptureThread.h"
 #include "RecognizeThread.h"
 #include "SerialGate.h"

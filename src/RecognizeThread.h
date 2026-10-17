@@ -7,7 +7,11 @@
 #include <QMetaType>
 #include <atomic>
 #include <facealgorithm/FaceAlgorithm.h>
-#include "FrameBank.h"
+#include <mvcore/FrameBank.h>
+
+// FrameBank 统一使用套件共享库 mvcore（版本号语义：waitForNew 按版本等待，
+// 采集快于识别时自动跳帧到最新，识别慢不拖累采集）
+using mvcore::FrameBank;
 
 class RecognizeThread : public QThread
 {
@@ -20,9 +24,12 @@ public:
 
     void run() override {
         cv::Mat frame;
+        int seen = 0;                      // 版本游标（mvcore FrameBank 版本从 1 起步）
+        int newVer = seen;
         while (_running) {
-            if (!_bank->waitForNew(frame, 200))
-                continue;                       // 5Hz 节流超时兜底
+            if (!_bank->waitForNew(seen, 200, frame, newVer))
+                continue;                  // 节流超时兜底（断流/暂停）
+            seen = newVer;
             const auto r = _algo->detectAndRecognize(frame);
             emit recognized(r);
         }
