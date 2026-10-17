@@ -22,11 +22,18 @@
 #include <QtConcurrent/QtConcurrentRun>
 #include <QPainter>
 #include <QHeaderView>
+#include <QSettings>
+#include <mvcore/PathResolver.h>
+#include <opencv2/imgproc.hpp>
 
 namespace {
-const char* kModelFile   = "gate_model.yml";
-const char* kPersonsFile = "gate_persons.json";
 const char* kClearanceNames[] = { "禁用", "访客", "员工", "管理员" };
+
+// 路径锚定 exe 目录（套件硬约束，mvcore::PathResolver 单点）：
+// 任意方式启动（IDE/双击/终端），模型/档案/日志/配置全部稳定落位 build/bin
+QString modelFile()   { return mvcore::PathResolver::dataPath(QStringLiteral("gate_model.yml")); }
+QString personsFile() { return mvcore::PathResolver::dataPath(QStringLiteral("gate_persons.json")); }
+QString gateIniFile() { return mvcore::PathResolver::dataPath(QStringLiteral("gate.ini")); }
 
 // 识别结果 → 0~100 相似度已在算法库内给出；此处只做阈值过滤展示
 QString hitLabel(const falgo::FaceHit& h)
@@ -41,11 +48,18 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
 {
     buildUi();
 
+    // 4b：串口协议注入（gate.ini [Serial]，缺省 = 默认板卡 0xA0 帧）
+    initGateProtocol();
+    // 4d：MediaLink 事件发布（gate.ini [Server] enabled 开关，缺省关闭）
+    initEventPublisher();
+    updateModeBadge();
+
     // 档案与算法模型加载（label 两侧一致）
-    _store.load(kPersonsFile);
-    if (!_algo.loadCascade("resources/haarcascade_frontalface_default.xml"))
-        appendLog(QStringLiteral("级联加载失败，人脸功能不可用"));
-    if (_algo.loadModel(kModelFile))
+    _store.load(personsFile());
+    if (!_algo.loadCascade(mvcore::PathResolver::resource(
+            QStringLiteral("resources/haarcascade_frontalface_default.xml")).toStdString()))
+        appendLog(QStringLiteral("级联加载失败，人脸功能不可用"), true);
+    if (_algo.loadModel(modelFile().toStdString()))
         appendLog(QStringLiteral("已加载人脸模型与档案（%1 人）").arg(_store.all().size()));
     else
         appendLog(QStringLiteral("无历史模型，请先注册人脸"));
@@ -82,6 +96,11 @@ void MainWindow::buildUi()
     auto* right = new QWidget(this);
     auto* rightLay = new QVBoxLayout(right);
 
+    // 4c：运行模式徽标——模拟=橙底，真实=绿底端口名（一眼可辨，杜绝演示数据误当真）
+    _modeBadge = new QLabel(right);
+    _modeBadge->setAlignment(Qt::AlignCenter);
+    rightLay->addWidget(_modeBadge);
+
     // 闸机设备组
     auto* gateBox = new QGroupBox(QStringLiteral("闸机控制"), right);
     auto* gateLay = new QFormLayout(gateBox);
@@ -109,6 +128,7 @@ void MainWindow::buildUi()
             ? QStringLiteral("串口已连接，真实开闸") : QStringLiteral("模拟模式（未连接串口）"));
         _gateState->setStyleSheet(_gate.isConnected()
             ? "color:#080; font-weight:bold;" : "color:#c80; font-weight:bold;");
+        updateModeBadge();   // 4c：徽标随连接状态刷新
     });
     connect(&_gate, &SerialGate::gateOpened, this, [this]() {
         _gateState->setText(_gate.isConnected()
@@ -121,7 +141,13 @@ void MainWindow::buildUi()
         appendLog(QStringLiteral("<< 关闸"));
     });
     connect(&_gate, &SerialGate::errorText, this, [this](const QString& m) {
-        appendLog(QStringLiteral("串口错误：%1").arg(m));
+        // 4b：串口异常显式升级——红色醒目 + 状态置红提示重连
+        appendLog(QStringLiteral("串口错误：%1").arg(m), true);
+        if (!_gate.isConnected()) {
+            _gateState->setText(QStringLiteral("串口异常，请重连"));
+            _gateState->setStyleSheet("color:#c00; font-weight:bold;");
+        }
+        updateModeBadge();
     });
 
     // 通行策略组
@@ -174,12 +200,86 @@ void MainWindow::buildUi()
     setCentralWidget(central);
 }
 
+// ---- 4b：gate.ini [Serial] 协议注入（换板卡改配置不改代码）----
+// 缺省键值 = 默认 0xA0 帧；hex 键（head/addr/cmd_on/cmd_off/channel）不合法时保留缺省并告警
+void MainWindow::initGateProtocol()
+{
+    GateProtocol proto = _gate.protocol();   // 从缺省起步
+    QSettings ini(gateIniFile(), QSettings::IniFormat);
+    ini.beginGroup("Serial");
+    auto hexKey = [&](const char* key, unsigned char& dst, bool& anyBad) {
+        const QString v = ini.value(key).toString().trimmed();
+        if (v.isEmpty()) return;
+        bool ok = false;
+        const uint n = v.toUInt(&ok, 16);
+        if (!ok || n > 0xFF) { anyBad = true; return; }
+        dst = static_cast<unsigned char>(n);
+    };
+    bool anyBad = false;
+    hexKey("head", proto.head, anyBad);
+    hexKey("addr", proto.addr, anyBad);
+    hexKey("cmd_on", proto.cmdOn, anyBad);
+    hexKey("cmd_off", proto.cmdOff, anyBad);
+    hexKey("channel", proto.channel, anyBad);
+    if (ini.contains("baud")) {
+        bool ok = false;
+        const int b = ini.value("baud").toInt(&ok);
+        if (ok && b > 0) proto.baud = b; else anyBad = true;
+    }
+    ini.endGroup();
+    if (anyBad)
+        appendLog(QStringLiteral("gate.ini [Serial] 存在非法键值，已回退缺省协议帧"), true);
+    _gate.setProtocol(proto);
+}
+
+// ---- 4d：MediaLink 事件发布（gate.ini [Server] enabled，缺省 false）----
+void MainWindow::initEventPublisher()
+{
+    QSettings ini(gateIniFile(), QSettings::IniFormat);
+    const bool enabled = ini.value("Server/enabled", false).toBool();
+    if (!enabled)
+        return;
+
+    _publisher = std::make_unique<EventPublisher>(true);
+    if (_publisher->httpUp() || _publisher->wsUp()) {
+        appendLog(QStringLiteral("事件发布已启用：HTTP:%1 WS:%2（契约 v0.3.0）")
+            .arg(_publisher->httpPort()).arg(_publisher->wsPort()));
+    } else {
+        // 端口被占等故障显式留痕——静默失败会让客户端"看不见闸机"
+        appendLog(QStringLiteral("事件发布启用失败：%1").arg(_publisher->lastLog()), true);
+        _publisher.reset();
+    }
+}
+
+void MainWindow::publishGateEvent(const QString& name, int label, double similarity,
+                                  bool granted, const QString& reason)
+{
+    if (!_publisher || !_publisher->enabled())
+        return;
+    _publisher->publish(name, label, similarity, granted, reason);
+}
+
+// ---- 4c：模式徽标单点刷新 ----
+void MainWindow::updateModeBadge()
+{
+    if (_gate.isSimulated()) {
+        _modeBadge->setText(QStringLiteral("模拟模式（未连接继电器，开闸仅为时序演示）"));
+        _modeBadge->setStyleSheet(
+            "background:#c80; color:#fff; padding:4px; font-weight:bold; border-radius:3px;");
+    } else {
+        _modeBadge->setText(QStringLiteral("真实模式 · %1（继电器指令实时下发）")
+            .arg(_gate.protocol().baud));
+        _modeBadge->setStyleSheet(
+            "background:#080; color:#fff; padding:4px; font-weight:bold; border-radius:3px;");
+    }
+}
+
 void MainWindow::startPipeline()
 {
     _bank = new FrameBank;
     _capture = new VideoCaptureThread(0, _bank, this);
     connect(_capture, &VideoCaptureThread::failed, this, [this]() {
-        appendLog(QStringLiteral("摄像头打开失败（index=0）"));
+        appendLog(QStringLiteral("摄像头打开失败（index=0）"), true);
     });
     _capture->start();
 
@@ -212,16 +312,21 @@ void MainWindow::onRecognized(const falgo::FrameResult& result)
         if (!throttled(QStringLiteral("gate:%1").arg(who), now, 3000))
             continue;
 
+        // 4b：未授权分支醒目红字——拒绝必须可追溯（含原因），且绝不触发开门
         appendLog(QStringLiteral("[%1] %2： %3")
-            .arg(QTime::currentTime().toString("HH:mm:ss"), who, d.reason));
+            .arg(QTime::currentTime().toString("HH:mm:ss"), who, d.reason), !d.granted);
         _log.append(who, h.label, h.similarity, d.granted, d.reason);
 
+        // 4d：通行/拒绝事件对外发布（契约 v0.3.0 gate_pass/gate_denied）
+        publishGateEvent(who, h.label, h.similarity, d.granted, d.reason);
+
+        // 权限红线：只有 granted 才下发开门命令——串口层收不到未授权指令帧
         if (d.granted)
             _gate.pulseOpen(3000);
     }
 }
 
-// ---- 注册（两段式：异步检测 → 弹窗 → GUI 同步入库）----
+// ---- 注册（三段式：异步检测 → 弹窗确认 → 异步入库+回滚保护）----
 void MainWindow::onRegisterClicked()
 {
     _registerBtn->setEnabled(false);
@@ -236,6 +341,19 @@ void MainWindow::onRegisterClicked()
                 appendLog(QStringLiteral("未检测到可注册的人脸"));
                 _registerBtn->setEnabled(true);
                 return;
+            }
+
+            // 4a 质量校验：归一化灰度脸须有足够纹理（拒绝纯色/过暗帧入库，
+            // 避免低质量样本拉低整体识别区分度）
+            {
+                cv::Scalar mean, stddev;
+                cv::meanStdDev(crop.gray100, mean, stddev);
+                if (stddev[0] < 25.0) {
+                    appendLog(QStringLiteral("人脸质量不合格（画面过暗/无纹理，标准差 %1 < 25），请改善光照后重试")
+                        .arg(stddev[0], 0, 'f', 0), true);
+                    _registerBtn->setEnabled(true);
+                    return;
+                }
             }
 
             // 弹窗：预览 + 姓名 + 初始权限
@@ -277,24 +395,47 @@ void MainWindow::onRegisterClicked()
                 return;
             }
 
-            // 入库（GUI 线程同步：<50ms，规避与识别线程的档案读写竞态）
             const QString name = nameEdit->text().trimmed();
             if (name.isEmpty()) {
                 appendLog(QStringLiteral("姓名为空，取消注册"));
                 _registerBtn->setEnabled(true);
                 return;
             }
-            Person& p = _store.ensurePerson(name, clearanceCombo->currentIndex() + 1);
-            _algo.addSample(crop.gray100, p.label);
-            _algo.saveModel(kModelFile);
-            _store.save(kPersonsFile);
 
-            refreshPersonTable();
-            appendLog(QStringLiteral("注册成功：%1（label=%2，权限=%3，样本=%4）")
-                .arg(name).arg(p.label)
-                .arg(QString::fromUtf8(kClearanceNames[p.clearance]))
-                .arg(_algo.sampleCount(p.label)));
-            _registerBtn->setEnabled(true);
+            // 4a 入库两段式（GUI 分配 label → 后台 addSample+saveModel）：
+            // saveModel 失败时 loadModel 回滚内存样本 + 新建人员撤销，绝不半注册
+            const bool existed = _store.findByName(name) != nullptr;
+            Person& p = _store.ensurePerson(name, clearanceCombo->currentIndex() + 1);
+            const int label = p.label;
+            const int clearance = p.clearance;
+            const cv::Mat gray100 = crop.gray100.clone();
+
+            auto* saveWatcher = new QFutureWatcher<bool>(this);
+            connect(saveWatcher, &QFutureWatcher<bool>::finished, this,
+                [this, saveWatcher, name, label, clearance, existed]() {
+                    saveWatcher->deleteLater();
+                    const bool ok = saveWatcher->result();
+
+                    // 失败回滚：内存样本丢弃（重载磁盘模型）+ 新建人员撤销
+                    if (!ok) {
+                        _algo.loadModel(modelFile().toStdString());
+                        if (!existed)
+                            _store.remove(label);
+                        _store.save(personsFile());
+                        refreshPersonTable();
+                        appendLog(QStringLiteral("注册失败：模型写入失败（%1），已回滚，请检查磁盘")
+                            .arg(modelFile()), true);
+                        _registerBtn->setEnabled(true);
+                        return;
+                    }
+                    onEntrySaved(name, label, clearance, _algo.sampleCount(label));
+                });
+            saveWatcher->setFuture(QtConcurrent::run([this, gray100, label]() -> bool {
+                // 算法库接口级互斥（Pimpl 内部锁），与识别线程天然串行，安全
+                if (!_algo.addSample(gray100, label))
+                    return false;
+                return _algo.saveModel(modelFile().toStdString());
+            }));
         });
     watcher->setFuture(QtConcurrent::run([this]() -> falgo::FaceCrop {
         cv::Mat frame;
@@ -304,6 +445,18 @@ void MainWindow::onRegisterClicked()
         _algo.detectLargest(frame, crop);
         return crop;
     }));
+}
+
+// ---- 入库成功收尾（GUI 线程）：档案持久化 + 表刷新 + 日志 ----
+void MainWindow::onEntrySaved(const QString& name, int label, int clearance, int samples)
+{
+    _store.save(personsFile());
+    refreshPersonTable();
+    appendLog(QStringLiteral("注册成功：%1（label=%2，权限=%3，样本=%4）")
+        .arg(name).arg(label)
+        .arg(QString::fromUtf8(kClearanceNames[clearance]))
+        .arg(samples));
+    _registerBtn->setEnabled(true);
 }
 
 // ---- 人员表 ----
@@ -322,7 +475,7 @@ void MainWindow::refreshPersonTable()
         connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [this, label](int idx) {
                     _store.setClearance(label, idx);
-                    _store.save(kPersonsFile);
+                    _store.save(personsFile());
                     appendLog(QStringLiteral("权限更新：label=%1 → %2")
                         .arg(label).arg(QString::fromUtf8(kClearanceNames[idx])));
                 });
@@ -352,13 +505,14 @@ void MainWindow::renderFrame()
         painter.drawText(qr.adjusted(0, -16, 0, 0), text);
     }
 
-    if (_gate.isOpen()) {   // 闸机开闸横幅
+    if (_gate.isOpen()) {   // 开闸横幅：4c 模拟态显式标注，杜绝误当真实放行
         painter.setPen(Qt::NoPen);
         painter.setBrush(QColor(200, 30, 30, 200));
         painter.drawRect(0, 0, img.width(), 34);
         painter.setPen(Qt::white);
         painter.drawText(img.rect().adjusted(0, 6, 0, -img.height() + 28),
-                         Qt::AlignHCenter, QStringLiteral("放 行 中"));
+                         Qt::AlignHCenter,
+                         _gate.isSimulated() ? QStringLiteral("模拟放行") : QStringLiteral("放 行 中"));
     }
     painter.end();
 
@@ -367,9 +521,12 @@ void MainWindow::renderFrame()
 }
 
 // ---- 杂项 ----
-void MainWindow::appendLog(const QString& line)
+void MainWindow::appendLog(const QString& line, bool highlight)
 {
-    _logList->insertItem(0, line);
+    auto* item = new QListWidgetItem(line);
+    if (highlight)
+        item->setForeground(QColor(200, 30, 30));   // 拒绝/错误：红色醒目可追溯
+    _logList->insertItem(0, item);
     while (_logList->count() > 100)
         _logList->takeItem(_logList->count() - 1);
 }

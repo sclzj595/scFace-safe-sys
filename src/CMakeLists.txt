@@ -20,6 +20,7 @@ target_link_libraries(FaceGate
     Qt5::SerialPort
     ${OpenCV_LIBS}
     mvcore            # 套件共享基础库：FrameBank/PathResolver/EventId（header-only）
+    medialink         # 4d：事件发布到 WS + /api/events 回查（契约 v0.3.0）
     FaceAlgorithm
 )
 

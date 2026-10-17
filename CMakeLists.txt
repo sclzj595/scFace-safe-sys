@@ -40,6 +40,10 @@ add_subdirectory(${FACEALGORITHM_DIR} ${CMAKE_BINARY_DIR}/FaceAlgorithm)
 set(MVCORE_DIR "${CMAKE_SOURCE_DIR}/../mvcore" CACHE PATH "mvcore 源码目录")
 add_subdirectory(${MVCORE_DIR} ${CMAKE_BINARY_DIR}/mvcore)
 
+# 独立服务层（4d：FaceGate 成为套件第三个消费者——gate_pass/gate_denied 事件外发）
+set(MEDIALINK_DIR "${CMAKE_SOURCE_DIR}/../MediaLink" CACHE PATH "MediaLink 源码目录")
+add_subdirectory(${MEDIALINK_DIR} ${CMAKE_BINARY_DIR}/MediaLink)
+
 add_subdirectory(src)
 
 file(COPY resources/ DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})

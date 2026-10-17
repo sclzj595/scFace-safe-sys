@@ -3,12 +3,6 @@
 #include <QDebug>
 
 namespace {
-const unsigned char FRAME_HEAD = 0xA0;
-const unsigned char ADDR = 0x01;          // 继电器板地址（默认 1）
-const unsigned char CMD_ON = 0x01;
-const unsigned char CMD_OFF = 0x00;
-const unsigned char CHANNEL = 0x01;       // 通道 1 接闸机开门线
-
 QString frameHex(const QByteArray& f)
 {
     return QString::fromLatin1(f.toHex(' ').toUpper());
@@ -19,18 +13,29 @@ SerialGate::SerialGate(QObject* parent) : QObject(parent)
 {
     _holdTimer.setSingleShot(true);
     connect(&_holdTimer, &QTimer::timeout, this, [this]() {
-        if (_port.isOpen() && !sendFrame(CMD_OFF, CHANNEL))
+        if (_port.isOpen() && !sendFrame(_proto.cmdOff, _proto.channel))
             return;   // 关闸失败已发 errorText
         _gateOpen = false;
         emit gateClosed();
     });
+
+    // 串口异常显式升级（4b）：驱动级错误（拔线/占用/校验错）不再静默，
+    // 上报宿主置红提示重连
+    connect(&_port, &QSerialPort::errorOccurred, this,
+            [this](QSerialPort::SerialPortError err) {
+                if (err == QSerialPort::NoError)
+                    return;
+                emit errorText(QStringLiteral("串口异常（%1）：%2，请检查接线后重连")
+                                   .arg(int(err))
+                                   .arg(_port.errorString()));
+            });
 }
 
 bool SerialGate::sendFrame(unsigned char cmd, unsigned char data)
 {
     QByteArray f;
-    f.append(FRAME_HEAD);
-    f.append(ADDR);
+    f.append(_proto.head);
+    f.append(_proto.addr);
     f.append(cmd);
     f.append(data);
     unsigned char sum = 0;
@@ -50,7 +55,7 @@ bool SerialGate::open(const QString& portName)
 {
     close();
     _port.setPortName(portName);
-    _port.setBaudRate(QSerialPort::Baud9600);
+    _port.setBaudRate(_proto.baud);
     _port.setDataBits(QSerialPort::Data8);
     _port.setParity(QSerialPort::NoParity);
     _port.setStopBits(QSerialPort::OneStop);
@@ -68,7 +73,7 @@ void SerialGate::close()
         _holdTimer.stop();
     if (_gateOpen) {           // 断开前尽量复位闸门
         if (isConnected())
-            sendFrame(CMD_OFF, CHANNEL);
+            sendFrame(_proto.cmdOff, _proto.channel);
         _gateOpen = false;
         emit gateClosed();
     }
@@ -83,7 +88,7 @@ void SerialGate::pulseOpen(int holdMs)
     _gateOpen = true;
     emit gateOpened();
 
-    if (isConnected() && !sendFrame(CMD_ON, CHANNEL))
+    if (isConnected() && !sendFrame(_proto.cmdOn, _proto.channel))
         return;                // 开闸失败：状态保持 open 由 holdTimer 关闭
     _holdTimer.start(holdMs);
 }
