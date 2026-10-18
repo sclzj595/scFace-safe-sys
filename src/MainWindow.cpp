@@ -85,7 +85,11 @@ MainWindow::~MainWindow()
 
 void MainWindow::buildUi()
 {
-    setWindowTitle(QStringLiteral("人脸闸机门禁系统（组件化算法库 FaceAlgorithm.dll）"));
+    const QString title = QStringLiteral("人脸闸机门禁系统（组件化算法库 FaceAlgorithm.dll）");
+    setWindowTitle(title);
+
+    // macOS 风格标题栏：frameless + 左置三灯（mvcore::mactitlebar 单点，SS 后续迁移）
+    _titleBar = mvcore::mactitlebar::attach(this, title);
 
     // 左：视频预览（QSS videoLabel：恒黑 + 描边圆角）
     _video = new QLabel(this);
@@ -200,7 +204,15 @@ void MainWindow::buildUi()
     auto* lay = new QHBoxLayout(central);
     lay->addWidget(_video, 3);
     lay->addWidget(right, 2);
-    setCentralWidget(central);
+
+    // 外层装配：标题栏 row0 + 内容 row1（attach 的缩放命中带要求 margins=0 贴边）
+    auto* outer = new QWidget(this);
+    auto* outerLay = new QVBoxLayout(outer);
+    outerLay->setContentsMargins(0, 0, 0, 0);
+    outerLay->setSpacing(0);
+    outerLay->addWidget(_titleBar);
+    outerLay->addWidget(central, 1);
+    setCentralWidget(outer);
 }
 
 // ---- 4b：gate.ini [Serial] 协议注入（换板卡改配置不改代码）----

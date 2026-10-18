@@ -12,7 +12,7 @@ int main(int argc, char* argv[])
 
     MainWindow w;
     mvcore::theme::apply(&w);   // 套件统一深色主题（令牌 QSS + DWM 暗色标题栏）
-    w.resize(1080, 620);
+    w.resize(1220, 740);   // 右面板表单最小宽度 + 640 视频下限，1080 会裁右缘
     w.show();
     return app.exec();
 }

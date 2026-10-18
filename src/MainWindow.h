@@ -9,6 +9,7 @@
 #include <QImage>
 #include <QStyle>
 #include <memory>
+#include <mvcore/MacTitleBar.h>
 #include <facealgorithm/FaceAlgorithm.h>
 #include <mvcore/FrameBank.h>
 #include <mvcore/PathResolver.h>
@@ -75,7 +76,8 @@ private:
     // UI
     QLabel* _video = nullptr;
     QLabel* _gateState = nullptr;
-    QLabel* _modeBadge = nullptr;            // 4c：模拟=橙 / 真实=绿（端口名）
+    QLabel* _modeBadge = nullptr;            // 4c：模拟=琥珀 / 真实=绿（QSS 语义属性）
+    mvcore::mactitlebar::TitleBar* _titleBar = nullptr;   // macOS 三灯标题栏（mvcore 单点）
     QPushButton* _registerBtn = nullptr;
     QTableWidget* _personTable = nullptr;
     QComboBox* _portCombo = nullptr;

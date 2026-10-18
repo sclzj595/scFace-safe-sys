@@ -29,6 +29,14 @@ set_target_properties(FaceGate PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
 )
 
+# 级联资源随构建同步（mvcore::PathResolver::resource 按 exe 目录解析 resources/）
+add_custom_command(TARGET FaceGate POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${CMAKE_SOURCE_DIR}/resources"
+      $<TARGET_FILE_DIR:FaceGate>/resources
+    COMMENT "Copying cascade resources to output directory"
+)
+
 # 运行时 DLL 部署（OpenCV SDK 复用 SS 仓内同版本包，套件内相对引用）
 if(WIN32)
   add_custom_command(TARGET FaceGate POST_BUILD
