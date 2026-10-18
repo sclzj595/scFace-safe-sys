@@ -189,6 +189,11 @@ void MainWindow::buildUi()
     _personTable->verticalHeader()->setVisible(false);
     _personTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     _personTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    // 纵向可下拉滚动：逐像素模式（行被截半时滚动条才可用），并保底 5 行视口
+    // ——否则右栏四组挤压下表格只剩一行高、行被拦腰裁切（实测截图）
+    _personTable->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    _personTable->setMinimumHeight(150);
+    _personTable->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     personLay->addWidget(_personTable, 1);
     rightLay->addWidget(personBox, 1);
 
@@ -198,6 +203,7 @@ void MainWindow::buildUi()
     auto* logBox = new QGroupBox(QStringLiteral("签到 / 通行记录"), right);
     auto* logLay = new QVBoxLayout(logBox);
     _logList = new QListWidget(logBox);
+    _logList->setMinimumHeight(110);   // 挤压保底：日志区不被人员管理吃光
     logLay->addWidget(_logList);
     rightLay->addWidget(logBox, 1);
 
