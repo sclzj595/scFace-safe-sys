@@ -185,7 +185,8 @@ void MainWindow::buildUi()
     _personTable = new QTableWidget(0, 3, personBox);
     _personTable->setHorizontalHeaderLabels({ QStringLiteral("姓名"),
         QStringLiteral("权限"), QStringLiteral("样本") });
-    _personTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    _personTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch); // 三列平铺满宽：无横向滚动，样本列不再被裁
+    _personTable->verticalHeader()->setVisible(false);
     _personTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     _personTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     personLay->addWidget(_personTable, 1);
@@ -380,6 +381,9 @@ void MainWindow::onRegisterClicked()
             // 弹窗：预览 + 姓名 + 初始权限
             QDialog dlg(this);
             dlg.setWindowTitle(QStringLiteral("注册人员"));
+            // 标题栏随主题：去 Win 原生"?"帮助钮 + DWM 暗色标题栏（与主窗一致）
+            dlg.setWindowFlag(Qt::WindowContextHelpButtonHint, false);
+            mvcore::wintheme::applyNative(&dlg, mvcore::uitheme::dark());
             auto* lay = new QVBoxLayout(&dlg);
             auto* preview = new QLabel(&dlg);
             const QImage previewImg(crop.bgr.data, crop.bgr.cols, crop.bgr.rows,
