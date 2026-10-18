@@ -3,7 +3,7 @@
 // 协议（可配置，缺省 = 常见 USB/串口继电器板 CH340 类 5 字节帧）：
 //   开继电器：A0 01 01 01 A3 ；关继电器：A0 01 00 01 A2
 //   （帧头 A0 + 地址 01 + 命令 + 通道 + 校验和=前 4 字节之和低 8 位）
-//   宿主从 exe 旁 data/gate.ini [Serial] 读取 GateProtocol 注入（换板卡不改代码）；
+//   宿主从 exe 旁 gate.ini [Serial] 读取 GateProtocol 注入（换板卡不改代码）；
 //   配置示例见仓库根 gate.ini.example。
 //
 // 模拟模式：无硬件演示用，pulseOpen 仅作状态时序（开 → hold → 关），
