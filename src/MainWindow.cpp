@@ -476,6 +476,7 @@ void MainWindow::refreshPersonTable()
                 this, [this, label](int idx) {
                     _store.setClearance(label, idx);
                     _store.save(personsFile());
+                    refreshPersonsSnapshot();   // 权限变更即时外发（不重建表格）
                     appendLog(QStringLiteral("权限更新：label=%1 → %2")
                         .arg(label).arg(QString::fromUtf8(kClearanceNames[idx])));
                 });
@@ -483,6 +484,25 @@ void MainWindow::refreshPersonTable()
         _personTable->setItem(row, 2,
             new QTableWidgetItem(QString::number(_algo.sampleCount(p.label))));
     }
+    refreshPersonsSnapshot();   // 档案变化路径均经此刷新（启动/注册/回滚），顺带推快照
+}
+
+// ---- v0.4.0：档案快照推送（PersonStore + 算法样本数 → 契约 PersonInfo 形状）----
+// PersonStore 归 GUI 线程所有，快照互斥解耦（HTTP 线程在 EventPublisher 内读取副本）
+void MainWindow::refreshPersonsSnapshot()
+{
+    if (!_publisher)
+        return;
+    nlohmann::json arr = nlohmann::json::array();
+    for (const Person& p : _store.all()) {
+        arr.push_back({
+            {"label", p.label},
+            {"name", p.name.toStdString()},
+            {"clearance", p.clearance},
+            {"samples", _algo.sampleCount(p.label)}   // 算法库接口级互斥，GUI 调用安全
+        });
+    }
+    _publisher->refreshPersonsSnapshot(std::move(arr));
 }
 
 // ---- 渲染节拍（GUI 线程仅取帧 + 绘制，零 CV 计算）----

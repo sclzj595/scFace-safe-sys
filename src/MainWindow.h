@@ -43,6 +43,7 @@ private:
     void buildUi();
     void startPipeline();
     void refreshPersonTable();
+    void refreshPersonsSnapshot();           // v0.4.0：档案变化后推送 /api/persons 快照
     void appendLog(const QString& line, bool highlight = false);   // highlight=红色醒目行
     void renderFrame();                      // 渲染节拍（GUI 线程，仅绘制）
     bool throttled(const QString& key, qint64 nowMs, qint64 windowMs);

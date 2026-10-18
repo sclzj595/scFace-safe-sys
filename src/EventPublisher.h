@@ -28,6 +28,8 @@
 
 #include <nlohmann/json.hpp>
 #include <cstdio>
+#include <functional>
+#include <mutex>
 
 class EventPublisher
 {
@@ -52,7 +54,12 @@ public:
         p.events = [this](int limit, const std::string& type) {
             return readTodayEvents(limit, type);
         };
-        p.persons = []() { return nlohmann::json::array(); };   // 档案管理在本地 UI，不外发
+        // v0.4.0 人员档案：GUI 线程 refreshPersonsSnapshot() 推送快照，此处仅回读——
+        // PersonStore 无锁且属 GUI 线程，HTTP 线程绝不直读（互斥快照解耦）
+        p.persons = [this]() {
+            std::lock_guard<std::mutex> lk(_personsMtx);
+            return _persons;
+        };
         _svc.setProviders(p);
 
         _httpUp = _svc.startHttp(_cfg.httpPort);
@@ -73,6 +80,14 @@ public:
     const QString& lastLog() const { return _lastLog; }
     int httpPort() const { return _cfg.httpPort; }
     int wsPort() const { return _cfg.wsPort; }
+
+    // v0.4.0 人员档案快照：GUI 线程在档案加载/注册/权限变更后调用，
+    // HTTP 线程经 /api/persons 读取副本（互斥解耦 PersonStore 的 GUI 单线程归属）
+    void refreshPersonsSnapshot(nlohmann::json j)
+    {
+        std::lock_guard<std::mutex> lk(_personsMtx);
+        _persons = std::move(j);
+    }
 
     // 通行/拒绝事件实时推送（GUI 线程调用；CheckInLog.append 由调用方负责，本类不落盘）
     void publish(const QString& name, int label, double similarity,
@@ -152,6 +167,10 @@ private:
     mlink::MediaLinkConfig _cfg;
     mvcore::EventIdSequencer _seq;   // 仅 GUI 线程 publish() 触碰
     QString _lastLog;
+
+    // 人员档案快照（GUI 写 / HTTP 读，_personsMtx 保护；空数组 = 未推送前合法响应）
+    std::mutex _personsMtx;
+    nlohmann::json _persons = nlohmann::json::array();
 };
 
 #endif // EVENTPUBLISHER_H
