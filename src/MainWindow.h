@@ -7,6 +7,7 @@
 #include <QMainWindow>
 #include <QHash>
 #include <QImage>
+#include <QStyle>
 #include <memory>
 #include <facealgorithm/FaceAlgorithm.h>
 #include <mvcore/FrameBank.h>
@@ -48,6 +49,7 @@ private:
     void renderFrame();                      // 渲染节拍（GUI 线程，仅绘制）
     bool throttled(const QString& key, qint64 nowMs, qint64 windowMs);
     void updateModeBadge();                  // 4c：模拟/真实模式徽标单点刷新
+    void setStateLabel(const QString& state);// 状态行语义色（ok/warn/danger → QSS）
     void initGateProtocol();                 // 4b：gate.ini [Serial] 协议注入
     void initEventPublisher();               // 4d：MediaLink 事件发布（gate.ini [Server] 开关）
     void publishGateEvent(const QString& name, int label, double similarity,

@@ -1,5 +1,6 @@
 // MainWindow.cpp —— 闸机业务编排
 #include "MainWindow.h"
+#include <mvcore/Theme.h>
 
 #include "PermissionService.h"
 #include <QLabel>
@@ -86,18 +87,19 @@ void MainWindow::buildUi()
 {
     setWindowTitle(QStringLiteral("人脸闸机门禁系统（组件化算法库 FaceAlgorithm.dll）"));
 
-    // 左：视频预览
+    // 左：视频预览（QSS videoLabel：恒黑 + 描边圆角）
     _video = new QLabel(this);
+    _video->setObjectName(QStringLiteral("videoLabel"));
     _video->setMinimumSize(640, 480);
     _video->setAlignment(Qt::AlignCenter);
-    _video->setStyleSheet("background:#111; color:#888;");
 
     // 右：控制面板
     auto* right = new QWidget(this);
     auto* rightLay = new QVBoxLayout(right);
 
-    // 4c：运行模式徽标——模拟=橙底，真实=绿底端口名（一眼可辨，杜绝演示数据误当真）
+    // 4c：运行模式徽标——模拟=琥珀，真实=绿（QSS modeBadge[mode=...]，一眼可辨）
     _modeBadge = new QLabel(right);
+    _modeBadge->setObjectName(QStringLiteral("modeBadge"));
     _modeBadge->setAlignment(Qt::AlignCenter);
     rightLay->addWidget(_modeBadge);
 
@@ -110,7 +112,8 @@ void MainWindow::buildUi()
                                 .arg(info.portName(), info.description()));
     _connectBtn = new QPushButton(QStringLiteral("连接"), gateBox);
     _gateState = new QLabel(QStringLiteral("模拟模式（未连接串口）"), gateBox);
-    _gateState->setStyleSheet("color:#c80; font-weight:bold;");
+    _gateState->setObjectName(QStringLiteral("stateLabel"));
+    _gateState->setProperty("state", QStringLiteral("warn"));
     gateLay->addRow(QStringLiteral("串口"), _portCombo);
     gateLay->addRow(QString(), _connectBtn);
     gateLay->addRow(QStringLiteral("闸机状态"), _gateState);
@@ -126,8 +129,7 @@ void MainWindow::buildUi()
                                                  : QStringLiteral("连接"));
         _gateState->setText(_gate.isConnected()
             ? QStringLiteral("串口已连接，真实开闸") : QStringLiteral("模拟模式（未连接串口）"));
-        _gateState->setStyleSheet(_gate.isConnected()
-            ? "color:#080; font-weight:bold;" : "color:#c80; font-weight:bold;");
+        setStateLabel(_gate.isConnected() ? QStringLiteral("ok") : QStringLiteral("warn"));
         updateModeBadge();   // 4c：徽标随连接状态刷新
     });
     connect(&_gate, &SerialGate::gateOpened, this, [this]() {
@@ -145,7 +147,7 @@ void MainWindow::buildUi()
         appendLog(QStringLiteral("串口错误：%1").arg(m), true);
         if (!_gate.isConnected()) {
             _gateState->setText(QStringLiteral("串口异常，请重连"));
-            _gateState->setStyleSheet("color:#c00; font-weight:bold;");
+            setStateLabel(QStringLiteral("danger"));
         }
         updateModeBadge();
     });
@@ -173,6 +175,7 @@ void MainWindow::buildUi()
     auto* personBox = new QGroupBox(QStringLiteral("人员管理"), right);
     auto* personLay = new QVBoxLayout(personBox);
     _registerBtn = new QPushButton(QStringLiteral("注册人脸"), personBox);
+    _registerBtn->setObjectName(QStringLiteral("registerBtn"));
     personLay->addWidget(_registerBtn);
 
     _personTable = new QTableWidget(0, 3, personBox);
@@ -262,16 +265,22 @@ void MainWindow::publishGateEvent(const QString& name, int label, double similar
 // ---- 4c：模式徽标单点刷新 ----
 void MainWindow::updateModeBadge()
 {
-    if (_gate.isSimulated()) {
-        _modeBadge->setText(QStringLiteral("模拟模式（未连接继电器，开闸仅为时序演示）"));
-        _modeBadge->setStyleSheet(
-            "background:#c80; color:#fff; padding:4px; font-weight:bold; border-radius:3px;");
-    } else {
-        _modeBadge->setText(QStringLiteral("真实模式 · %1（继电器指令实时下发）")
-            .arg(_gate.protocol().baud));
-        _modeBadge->setStyleSheet(
-            "background:#080; color:#fff; padding:4px; font-weight:bold; border-radius:3px;");
-    }
+    const bool sim = _gate.isSimulated();
+    _modeBadge->setText(sim
+        ? QStringLiteral("模拟模式（未连接继电器，开闸仅为时序演示）")
+        : QStringLiteral("真实模式 · %1（继电器指令实时下发）").arg(_gate.protocol().baud));
+    // 安全语义经动态属性交由 mvcore 主题着色（禁散落色值）
+    _modeBadge->setProperty("mode", sim ? QStringLiteral("sim") : QStringLiteral("real"));
+    _modeBadge->style()->unpolish(_modeBadge);
+    _modeBadge->style()->polish(_modeBadge);
+}
+
+// ---- 状态行语义色（stateLabel[state=ok|warn|danger] → QSS）----
+void MainWindow::setStateLabel(const QString& state)
+{
+    _gateState->setProperty("state", state);
+    _gateState->style()->unpolish(_gateState);
+    _gateState->style()->polish(_gateState);
 }
 
 void MainWindow::startPipeline()
@@ -545,7 +554,7 @@ void MainWindow::appendLog(const QString& line, bool highlight)
 {
     auto* item = new QListWidgetItem(line);
     if (highlight)
-        item->setForeground(QColor(200, 30, 30));   // 拒绝/错误：红色醒目可追溯
+        item->setForeground(mvcore::uitheme::dark().danger);   // 拒绝/错误：红色醒目可追溯
     _logList->insertItem(0, item);
     while (_logList->count() > 100)
         _logList->takeItem(_logList->count() - 1);

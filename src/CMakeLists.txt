@@ -19,9 +19,10 @@ target_link_libraries(FaceGate
     Qt5::Concurrent
     Qt5::SerialPort
     ${OpenCV_LIBS}
-    mvcore            # 套件共享基础库：FrameBank/PathResolver/EventId（header-only）
+    mvcore            # 套件共享基础库：FrameBank/PathResolver/EventId/Theme（header-only）
     medialink         # 4d：事件发布到 WS + /api/events 回查（契约 v0.3.0）
     FaceAlgorithm
+    dwmapi            # mvcore::theme DWM 暗色标题栏（WinTheme）
 )
 
 set_target_properties(FaceGate PROPERTIES
