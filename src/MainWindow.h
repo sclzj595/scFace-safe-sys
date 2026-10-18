@@ -7,6 +7,7 @@
 #include <QMainWindow>
 #include <QHash>
 #include <QImage>
+#include <QQueue>
 #include <QStyle>
 #include <memory>
 #include <mvcore/MacTitleBar.h>
@@ -40,6 +41,7 @@ public:
 private slots:
     void onRecognized(const falgo::FrameResult& result);
     void onRegisterClicked();
+    void onImportPhotosClicked();            // 批量预注册：证件照数据集导入
 
 private:
     void buildUi();
@@ -56,6 +58,20 @@ private:
     void publishGateEvent(const QString& name, int label, double similarity,
                           bool granted, const QString& reason);
     void onEntrySaved(const QString& name, int label, int clearance, int samples);
+
+    // ---- 批量导入（照片预注册）----
+    // 每个待导入人一个作业：samples 为质检通过的归一化人脸（GUI 线程持有）
+    struct ImportJob {
+        QString name;                 // names.txt 映射名，缺省=文件夹名
+        QVector<cv::Mat> samples;     // 质检通过样本（gray100）
+        int skipped = 0;              // 检测失败/质检不达标被跳过的照片数
+    };
+    void processNextImport();                // 逐人事务链：入库→成功/回滚→下一个
+
+    QQueue<ImportJob> _importQueue;          // GUI 线程专属（_store 同纪律）
+    int _importTotal = 0;
+    int _importOk = 0;
+    int _importFail = 0;
 
     // 管线
     FrameBank* _bank = nullptr;
@@ -79,6 +95,7 @@ private:
     QLabel* _modeBadge = nullptr;            // 4c：模拟=琥珀 / 真实=绿（QSS 语义属性）
     mvcore::mactitlebar::TitleBar* _titleBar = nullptr;   // macOS 三灯标题栏（mvcore 单点）
     QPushButton* _registerBtn = nullptr;
+    QPushButton* _importBtn = nullptr;       // 批量导入照片（预注册预热）
     QTableWidget* _personTable = nullptr;
     QComboBox* _portCombo = nullptr;
     QPushButton* _connectBtn = nullptr;

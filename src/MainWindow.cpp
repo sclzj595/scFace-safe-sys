@@ -21,6 +21,10 @@
 #include <QLineEdit>
 #include <QFutureWatcher>
 #include <QtConcurrent/QtConcurrentRun>
+#include <QFileDialog>
+#include <QFile>
+#include <QDir>
+#include <QFileInfo>
 #include <QPainter>
 #include <QHeaderView>
 #include <QSettings>
@@ -198,6 +202,12 @@ void MainWindow::buildUi()
     rightLay->addWidget(personBox, 1);
 
     connect(_registerBtn, &QPushButton::clicked, this, &MainWindow::onRegisterClicked);
+
+    // 批量导入照片（预注册）：每子文件夹=一人，names.txt 可映射显示名
+    _importBtn = new QPushButton(QStringLiteral("批量导入照片"), personBox);
+    _importBtn->setObjectName(QStringLiteral("importBtn"));
+    connect(_importBtn, &QPushButton::clicked, this, &MainWindow::onImportPhotosClicked);
+    personLay->addWidget(_importBtn);
 
     // 签到日志组
     auto* logBox = new QGroupBox(QStringLiteral("签到 / 通行记录"), right);
@@ -475,6 +485,133 @@ void MainWindow::onRegisterClicked()
         falgo::FaceCrop crop;
         _algo.detectLargest(frame, crop);
         return crop;
+    }));
+}
+
+// ---- 批量导入（照片预注册预热）----
+// 阶段1（后台）：遍历根目录子文件夹 → imread → detectLargest → 质检 → 样本集。
+//   子文件夹名=人名；可选 names.txt（每行 `文件夹名=显示名`）做名字映射——
+//   兼容归档 Python 原型 face_dataset 这类"ID 文件夹名"的历史数据
+// 阶段2（GUI 事务链）：逐人 ensurePerson → 后台 addSample+saveModel → 失败回滚该人。
+//   与实时注册同款两段式：_store 严格 GUI 线程，算法入库走接口级互斥
+void MainWindow::onImportPhotosClicked()
+{
+    const QString root = QFileDialog::getExistingDirectory(
+        this, QStringLiteral("选择数据集根目录（每个子文件夹=一人；可选 names.txt 映射显示名）"));
+    if (root.isEmpty())
+        return;
+
+    _importBtn->setEnabled(false);
+    _registerBtn->setEnabled(false);
+    appendLog(QStringLiteral("正在批量检测照片…"));
+
+    auto* w = new QFutureWatcher<QVector<ImportJob>>(this);
+    connect(w, &QFutureWatcher<QVector<ImportJob>>::finished, this, [this, w]() {
+        w->deleteLater();
+        for (const ImportJob& j : w->result())
+            _importQueue.enqueue(j);
+        _importTotal = _importQueue.size();
+        _importOk = 0;
+        _importFail = 0;
+        if (_importQueue.isEmpty()) {
+            appendLog(QStringLiteral("该目录未检出可导入人脸（需子文件夹内含正面照片）"), true);
+            _importBtn->setEnabled(true);
+            _registerBtn->setEnabled(true);
+            return;
+        }
+        appendLog(QStringLiteral("检出 %1 人，逐人入库（默认访客权限，表格内可改）…").arg(_importTotal));
+        processNextImport();
+    });
+    w->setFuture(QtConcurrent::run([this, root]() -> QVector<ImportJob> {
+        // 名字映射表：文件夹名 → 显示名（无映射则用文件夹名原样）
+        QHash<QString, QString> mapping;
+        QFile mf(root + QStringLiteral("/names.txt"));
+        if (mf.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            while (!mf.atEnd()) {
+                const QString line = QString::fromUtf8(mf.readLine()).trimmed();
+                const int eq = line.indexOf('=');
+                if (eq > 0)
+                    mapping.insert(line.left(eq).trimmed(), line.mid(eq + 1).trimmed());
+            }
+        }
+
+        QVector<ImportJob> jobs;
+        const QStringList imgFilter = { QStringLiteral("*.png"), QStringLiteral("*.jpg"),
+                                        QStringLiteral("*.jpeg"), QStringLiteral("*.bmp") };
+        const QDir rootDir(root);
+        const QStringList subs = rootDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+        for (const QString& sub : subs) {
+            ImportJob job;
+            job.name = mapping.value(sub, sub);
+            const QDir dir(rootDir.absoluteFilePath(sub));
+            for (const QFileInfo& fi : dir.entryInfoList(imgFilter, QDir::Files)) {
+                if (job.samples.size() >= 8)   // 每人样本上限：同源照过多无增益
+                    break;
+                // 中文路径：imread 走本地 8bit 编码（Windows=GBK）
+                const cv::Mat img = cv::imread(
+                    fi.absoluteFilePath().toLocal8Bit().toStdString(), cv::IMREAD_COLOR);
+                if (img.empty()) { job.skipped++; continue; }
+                falgo::FaceCrop crop;
+                _algo.detectLargest(img, crop);   // 与识别线程共用实例（接口级互斥）
+                if (crop.gray100.empty()) { job.skipped++; continue; }
+                // 质检同实时注册：过暗/无纹理样本拉低区分度
+                cv::Scalar mean, stddev;
+                cv::meanStdDev(crop.gray100, mean, stddev);
+                if (stddev[0] < 25.0) { job.skipped++; continue; }
+                job.samples.append(crop.gray100.clone());
+            }
+            if (!job.samples.isEmpty())
+                jobs.append(job);
+            else if (job.skipped > 0)
+                qWarning() << "[FaceGate] import: all" << job.skipped << "photos skipped in" << sub;
+        }
+        return jobs;
+    }));
+}
+
+// 逐人事务链：入库 → 成功/回滚 → 下一个（队列空则汇总收尾）
+void MainWindow::processNextImport()
+{
+    if (_importQueue.isEmpty()) {
+        refreshPersonTable();
+        refreshPersonsSnapshot();
+        appendLog(QStringLiteral("批量导入完成：成功 %1 人，失败 %2 人")
+            .arg(_importOk).arg(_importFail), _importFail > 0);
+        _importBtn->setEnabled(true);
+        _registerBtn->setEnabled(true);
+        return;
+    }
+    const ImportJob job = _importQueue.dequeue();
+    const bool existed = _store.findByName(job.name) != nullptr;
+    Person& p = _store.ensurePerson(job.name, 1);   // 导入默认访客，表格内可调档
+    const int label = p.label;
+    _store.save(personsFile());
+
+    auto* sw = new QFutureWatcher<bool>(this);
+    connect(sw, &QFutureWatcher<bool>::finished, this, [this, sw, job, label, existed]() {
+        sw->deleteLater();
+        if (!sw->result()) {
+            // 回滚与实时注册同款：重载磁盘模型 + 撤销新建人员，绝不半注册
+            _algo.loadModel(modelFile().toStdString());
+            if (!existed) { _store.remove(label); _store.save(personsFile()); }
+            appendLog(QStringLiteral("导入 %1 失败：样本/模型写入失败，已回滚").arg(job.name), true);
+            _importFail++;
+        } else {
+            _importOk++;
+            onEntrySaved(job.name, label, 1, _algo.sampleCount(label));
+            if (job.skipped > 0)
+                appendLog(QStringLiteral("导入 %1：跳过 %2 张（未检出/质量不合格）")
+                    .arg(job.name).arg(job.skipped));
+        }
+        processNextImport();
+    });
+    const QVector<cv::Mat> samples = job.samples;
+    const int lbl = label;
+    sw->setFuture(QtConcurrent::run([this, samples, lbl]() -> bool {
+        for (const cv::Mat& s : samples)
+            if (!_algo.addSample(s, lbl))
+                return false;
+        return _algo.saveModel(modelFile().toStdString());
     }));
 }
 
