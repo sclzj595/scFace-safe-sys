@@ -17,13 +17,10 @@
 #include <medialink/MediaLink.h>
 #include <medialink/MediaLinkConfig.h>
 #include <mvcore/EventId.h>
-#include <mvcore/PathResolver.h>
 
 #include <QString>
 #include <QDateTime>
-#include <QFile>
-#include <QDir>
-#include <QJsonDocument>
+#include <QVector>
 #include <QJsonObject>
 
 #include <nlohmann/json.hpp>
@@ -31,13 +28,16 @@
 #include <functional>
 #include <mutex>
 
+class CheckInLog;   // 自持锁读（审查 #1）：EventPublisher 绝不裸读日志文件
+
 class EventPublisher
 {
 public:
     EventPublisher(const EventPublisher&) = delete;
     EventPublisher& operator=(const EventPublisher&) = delete;
 
-    explicit EventPublisher(bool enabled = false) : _enabled(enabled)
+    explicit EventPublisher(bool enabled, CheckInLog* log)
+        : _enabled(enabled), _log(log)
     {
         if (!_enabled)
             return;
@@ -113,24 +113,18 @@ public:
     }
 
 private:
-    // /api/events 回查：读 CheckInLog 今天的 JSONL（唯一事实源），按契约字段映射，
-    // id 由 ts+文件顺序 seq 确定性生成（与实时推送不同源但格式一致，客户端仅作字符串比较）
+    // /api/events 回查：经 CheckInLog 自持锁读今天的 JSONL（唯一事实源，审查 #1），
+    // 按契约字段映射，id 由 ts+文件顺序 seq 确定性生成（与实时推送不同源但格式一致，
+    // 客户端仅作字符串比较）
     nlohmann::json readTodayEvents(int limit, const std::string& type)
     {
         nlohmann::json out = nlohmann::json::array();
         if (limit <= 0)
             limit = 50;
-        const QString path = mvcore::PathResolver::dataPath(QStringLiteral("logs")) + "/"
-            + QDateTime::currentDateTime().toString("yyyy-MM-dd") + ".jsonl";
-        QFile f(path);
-        if (!f.open(QIODevice::ReadOnly))
-            return out;
+        const QVector<QJsonObject> rows = _log->readToday();
         qint64 lastTs = -1;
         int seq = 0;
-        while (!f.atEnd()) {
-            const QJsonObject o = QJsonDocument::fromJson(f.readLine()).object();
-            if (o.isEmpty())
-                continue;
+        for (const QJsonObject& o : rows) {
             const qint64 ts = static_cast<qint64>(o.value("ts").toDouble());
             seq = (ts == lastTs) ? seq + 1 : 0;   // 回读侧同毫秒序号按文件顺序重建
             lastTs = ts;
@@ -171,6 +165,8 @@ private:
     // 人员档案快照（GUI 写 / HTTP 读，_personsMtx 保护；空数组 = 未推送前合法响应）
     std::mutex _personsMtx;
     nlohmann::json _persons = nlohmann::json::array();
+
+    CheckInLog* _log = nullptr;   // 宿主所有、生命周期覆盖本类（MainWindow 成员）
 };
 
 #endif // EVENTPUBLISHER_H

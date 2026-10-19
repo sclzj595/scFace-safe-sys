@@ -4,6 +4,7 @@
 #define RECOGNIZETHREAD_H
 
 #include <QThread>
+#include <QDebug>
 #include <QMetaType>
 #include <atomic>
 #include <facealgorithm/FaceAlgorithm.h>
@@ -30,8 +31,16 @@ public:
             if (!_bank->waitForNew(seen, 200, frame, newVer))
                 continue;                  // 节流超时兜底（断流/暂停）
             seen = newVer;
-            const auto r = _algo->detectAndRecognize(frame);
-            emit recognized(r);
+            // 异常隔离（审查 #2）：与 SS AnalysisThread 同款——算法库抛异常
+            // 只跳过当前帧，绝不带崩识别线程（未捕获异常 = std::terminate 全进程）
+            try {
+                const auto r = _algo->detectAndRecognize(frame);
+                emit recognized(r);
+            } catch (const cv::Exception& e) {
+                qWarning() << "[RecognizeThread] cv exception, frame skipped:" << e.what();
+            } catch (const std::exception& e) {
+                qWarning() << "[RecognizeThread] std exception, frame skipped:" << e.what();
+            }
         }
     }
 

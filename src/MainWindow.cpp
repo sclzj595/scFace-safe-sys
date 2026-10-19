@@ -272,7 +272,7 @@ void MainWindow::initEventPublisher()
     if (!enabled)
         return;
 
-    _publisher = std::make_unique<EventPublisher>(true);
+    _publisher = std::make_unique<EventPublisher>(true, &_log);
     if (_publisher->httpUp() || _publisher->wsUp()) {
         appendLog(QStringLiteral("事件发布已启用：HTTP:%1 WS:%2（契约 v0.3.0）")
             .arg(_publisher->httpPort()).arg(_publisher->wsPort()));
@@ -389,9 +389,9 @@ void MainWindow::onRegisterClicked()
             {
                 cv::Scalar mean, stddev;
                 cv::meanStdDev(crop.gray100, mean, stddev);
-                if (stddev[0] < 25.0) {
-                    appendLog(QStringLiteral("人脸质量不合格（画面过暗/无纹理，标准差 %1 < 25），请改善光照后重试")
-                        .arg(stddev[0], 0, 'f', 0), true);
+                if (stddev[0] < kMinFaceQualityStddev) {
+                    appendLog(QStringLiteral("人脸质量不足（灰度标准差 %1 < %2），请改善光照后重试")
+                        .arg(stddev[0], 0, 'f', 0).arg(kMinFaceQualityStddev, 0, 'f', 0), true);
                     _registerBtn->setEnabled(true); _importBtn->setEnabled(true); // 同步解锁导入
                     return;
                 }
@@ -595,6 +595,7 @@ void MainWindow::processNextImport()
         sw->deleteLater();
         if (!sw->result()) {
             // 回滚与实时注册同款：重载磁盘模型 + 撤销新建人员，绝不半注册
+            _algo.clearLabel(label);            // 样本双保险（审查 #8；loadModel 为主清除）
             _algo.loadModel(modelFile().toStdString());
             if (!existed) { _store.remove(label); _store.save(personsFile()); }
             appendLog(QStringLiteral("导入 %1 失败：样本/模型写入失败，已回滚").arg(job.name), true);

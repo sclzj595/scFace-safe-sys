@@ -12,6 +12,7 @@
 #include <QDateTime>
 #include <QFile>
 #include <QDir>
+#include <QVector>
 #include <QJsonDocument>
 #include <QJsonObject>
 
@@ -41,6 +42,25 @@ public:
             return;
         f.write(QJsonDocument(o).toJson(QJsonDocument::Compact));
         f.write("\n");
+    }
+
+    // 当日日志自持锁读（审查 #1）：与 append 共用 _mutex，HTTP 回查线程
+    // 不会读到半行截断数据；坏行（空解析）跳过。返回解析成功对象（按文件顺序）
+    QVector<QJsonObject> readToday()
+    {
+        QVector<QJsonObject> rows;
+        QMutexLocker locker(&_mutex);
+        const QString path = _root + "/" +
+            QDateTime::currentDateTime().toString("yyyy-MM-dd") + ".jsonl";
+        QFile f(path);
+        if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
+            return rows;
+        while (!f.atEnd()) {
+            const QJsonObject o = QJsonDocument::fromJson(f.readLine()).object();
+            if (!o.isEmpty())
+                rows.append(o);
+        }
+        return rows;
     }
 
 private:

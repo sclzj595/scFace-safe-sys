@@ -96,6 +96,10 @@ private:
     mvcore::mactitlebar::TitleBar* _titleBar = nullptr;   // macOS 三灯标题栏（mvcore 单点）
     QPushButton* _registerBtn = nullptr;
     QPushButton* _importBtn = nullptr;       // 批量导入照片（预注册预热）
+
+    // 人脸样本质量下限（灰度标准差）：注册与批量导入共用单点（审查 #5）。
+    // 过暗/无纹理样本拉低 LBPH 区分度；照片导入单独放宽时只改这里
+    static constexpr double kMinFaceQualityStddev = 25.0;
     QTableWidget* _personTable = nullptr;
     QComboBox* _portCombo = nullptr;
     QPushButton* _connectBtn = nullptr;
