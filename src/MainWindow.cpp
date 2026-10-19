@@ -367,7 +367,10 @@ void MainWindow::onRecognized(const falgo::FrameResult& result)
 // ---- 注册（三段式：异步检测 → 弹窗确认 → 异步入库+回滚保护）----
 void MainWindow::onRegisterClicked()
 {
+    // 与批量导入互锁：注册回滚 loadModel(disk) 会抹掉导入刚加的内存样本，
+    // 两流程并发 = 数据丢失竞态（导入侧 L504-505 已互锁，此处补反向）
     _registerBtn->setEnabled(false);
+    _importBtn->setEnabled(false);
     appendLog(QStringLiteral("正在检测人脸…"));
 
     auto* watcher = new QFutureWatcher<falgo::FaceCrop>(this);
@@ -377,7 +380,7 @@ void MainWindow::onRegisterClicked()
             const falgo::FaceCrop crop = watcher->result();
             if (crop.gray100.empty()) {
                 appendLog(QStringLiteral("未检测到可注册的人脸"));
-                _registerBtn->setEnabled(true);
+                _registerBtn->setEnabled(true); _importBtn->setEnabled(true); // 同步解锁导入
                 return;
             }
 
@@ -389,7 +392,7 @@ void MainWindow::onRegisterClicked()
                 if (stddev[0] < 25.0) {
                     appendLog(QStringLiteral("人脸质量不合格（画面过暗/无纹理，标准差 %1 < 25），请改善光照后重试")
                         .arg(stddev[0], 0, 'f', 0), true);
-                    _registerBtn->setEnabled(true);
+                    _registerBtn->setEnabled(true); _importBtn->setEnabled(true); // 同步解锁导入
                     return;
                 }
             }
@@ -432,14 +435,14 @@ void MainWindow::onRegisterClicked()
             lay->addWidget(btns);
 
             if (dlg.exec() != QDialog::Accepted) {
-                _registerBtn->setEnabled(true);
+                _registerBtn->setEnabled(true); _importBtn->setEnabled(true); // 同步解锁导入
                 return;
             }
 
             const QString name = nameEdit->text().trimmed();
             if (name.isEmpty()) {
                 appendLog(QStringLiteral("姓名为空，取消注册"));
-                _registerBtn->setEnabled(true);
+                _registerBtn->setEnabled(true); _importBtn->setEnabled(true); // 同步解锁导入
                 return;
             }
 
@@ -466,7 +469,7 @@ void MainWindow::onRegisterClicked()
                         refreshPersonTable();
                         appendLog(QStringLiteral("注册失败：模型写入失败（%1），已回滚，请检查磁盘")
                             .arg(modelFile()), true);
-                        _registerBtn->setEnabled(true);
+                        _registerBtn->setEnabled(true); _importBtn->setEnabled(true); // 同步解锁导入
                         return;
                     }
                     onEntrySaved(name, label, clearance, _algo.sampleCount(label));
@@ -516,7 +519,7 @@ void MainWindow::onImportPhotosClicked()
         if (_importQueue.isEmpty()) {
             appendLog(QStringLiteral("该目录未检出可导入人脸（需子文件夹内含正面照片）"), true);
             _importBtn->setEnabled(true);
-            _registerBtn->setEnabled(true);
+            _registerBtn->setEnabled(true); _importBtn->setEnabled(true); // 同步解锁导入
             return;
         }
         appendLog(QStringLiteral("检出 %1 人，逐人入库（默认访客权限，表格内可改）…").arg(_importTotal));
@@ -578,7 +581,7 @@ void MainWindow::processNextImport()
         appendLog(QStringLiteral("批量导入完成：成功 %1 人，失败 %2 人")
             .arg(_importOk).arg(_importFail), _importFail > 0);
         _importBtn->setEnabled(true);
-        _registerBtn->setEnabled(true);
+        _registerBtn->setEnabled(true); _importBtn->setEnabled(true); // 同步解锁导入
         return;
     }
     const ImportJob job = _importQueue.dequeue();
@@ -624,7 +627,7 @@ void MainWindow::onEntrySaved(const QString& name, int label, int clearance, int
         .arg(name).arg(label)
         .arg(QString::fromUtf8(kClearanceNames[clearance]))
         .arg(samples));
-    _registerBtn->setEnabled(true);
+    _registerBtn->setEnabled(true); _importBtn->setEnabled(true); // 同步解锁导入
 }
 
 // ---- 人员表 ----
